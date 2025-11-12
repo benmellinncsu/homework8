@@ -1,0 +1,456 @@
+---
+title: "Homework 8"
+format: html
+editor: visual
+---
+
+# Homework 8
+
+First, upload the data.
+
+```{r}
+library(tidyr)
+library(readr)
+df <- read_csv("SeoulBikeData (1).csv", locale=locale(encoding="latin1"))
+
+```
+
+Check out the data:
+
+```{r}
+dim(df)
+str(df)
+
+```
+
+## Data cleaning
+
+I'd like to check for missingness.
+
+```{r}
+sum(is.na(df))
+```
+
+No missing data. That's good!
+
+```{r}
+summary(df)
+```
+
+Check unique values in character columns
+
+```{r}
+lapply(df[sapply(df, is.character)], unique)
+```
+
+Dealing with the date column, convert it into proper lubridate format.
+
+```{r}
+library(lubridate)
+df$Date <- dmy(df$Date)
+
+```
+
+```{r}
+df$Seasons<-as.factor(df$Seasons)
+df$"Functioning Day"<-as.factor(df$"Functioning Day")
+df$Holiday<-as.factor(df$Holiday)
+
+
+```
+
+Checking these out, make sure it all looks ok.
+
+```{r}
+unique(df$Seasons)
+
+unique(df$"Functioning Day")
+
+unique(df$Holiday)
+
+
+```
+
+Renaming columns for ease of referencing. Want to do this in one go, so I'm going to try to use the janitor package to do this.
+
+```{r}
+library(janitor)
+df <- df |>
+  janitor::clean_names()
+colnames(df)
+```
+
+That looks really nice. Thanks Janitor!
+
+Next, I'd like to look at some summary statistics
+
+```{r}
+library(dplyr)
+df |>  
+  group_by(functioning_day) |>  
+  summarise(
+    mean_bikes = mean(rented_bike_count),
+    median_bikes = median(rented_bike_count)
+  )
+```
+
+Functioning day is odd--I think it means if the bike service was functional or not. This would explain why no bikes are rented on days when it is no. We should probably throw out the no cases, they won't be helpful or insightful to our analysis.
+
+```{r}
+df_subset<-df|>
+  filter(functioning_day=="Yes")
+```
+
+Let's look at some more statistics for this subsetted dataset.
+
+```{r}
+df_subset |>  
+  group_by(seasons) |>  
+  summarise(
+    mean_bikes = mean(rented_bike_count),
+    median_bikes = median(rented_bike_count)
+  )
+
+df_subset |>  
+  group_by(holiday) |>  
+  summarise(
+    mean_bikes = mean(rented_bike_count),
+    median_bikes = median(rented_bike_count)
+  )
+```
+
+Now, I'm going to aggregate all the hourly data into the day column, along with season and holiday as specified in the document
+
+```{r}
+df_daily <- df |>
+  group_by(date, seasons, holiday) |>
+  summarise(
+    total_bikes = sum(rented_bike_count),
+    total_rainfall = sum(rainfall_mm),
+    total_snowfall = sum(snowfall_cm),
+    mean_temperature = mean(temperature_c),
+    mean_humidity = mean(humidity_percent),
+    mean_wind_speed = mean(wind_speed_m_s)
+  )
+```
+
+Make sure that our new aggregated df looks ok.
+
+```{r}
+df_daily
+```
+
+That looks ok.
+
+## Data exploration
+
+I'm primarily interested to see how weather affects bike rentals.
+
+Let's look at some summary stats for categorical variables.
+
+```{r}
+df_daily |>  
+  group_by(seasons) |>  
+  summarise(
+    mean_bikes = mean(total_bikes),
+    median_bikes = median(total_bikes)
+  )
+```
+
+```{r}
+
+df_daily |>  
+  group_by(holiday) |>  
+  summarise(
+    mean_bikes = mean(total_bikes),
+    median_bikes = median(total_bikes)
+  )
+```
+
+Interesting, I would have initially guessed it is the opposite, but it must be related to work commuters.
+
+Let's look at the relationship between weather variables and bikes rented next.
+
+## Rainfall
+
+```{r}
+library(ggplot2)
+
+ggplot(df_daily,aes(x=total_rainfall, y=total_bikes))+
+  geom_point()+
+  labs(
+    x="Rainfall (mm)",
+    y="Total Bikes Rented"
+  )
+
+cor(df_daily$total_bikes, df_daily$total_rainfall)
+
+```
+
+## Snow
+
+```{r}
+ggplot(df_daily,aes(x=total_snowfall, y=total_bikes))+
+  geom_point()+
+  labs(
+    x="Snowfall (cm)",
+    y="Total Bikes Rented"
+  )
+
+cor(df_daily$total_bikes, df_daily$total_snowfall)
+```
+
+## Temperature
+
+```{r}
+ggplot(df_daily,aes(x=mean_temperature, y=total_bikes))+
+  geom_point()+
+  labs(
+    x="Temp (C)",
+    y="Total Bikes Rented"
+  )
+
+cor(df_daily$total_bikes, df_daily$mean_temperature)
+```
+
+## Wind Speed
+
+```{r}
+ggplot(df_daily,aes(x=mean_wind_speed, y=total_bikes))+
+  geom_point()+
+  labs(
+    x="Wind Speed",
+    y="Total Bikes Rented"
+  )
+
+cor(df_daily$total_bikes, df_daily$mean_wind_speed)
+```
+
+I just want to check out some correlations between numeric variables. I bet temperature and snow are related. Maybe temperature and wind speed as well.
+
+```{r}
+
+ggplot(df_daily,aes(x=mean_temperature, y=total_snowfall))+
+  geom_point()+
+  labs(
+    x="Temperature",
+    y="Snowfall"
+  )
+```
+
+```{r}
+ggplot(df_daily,aes(x=mean_temperature, y=mean_wind_speed))+
+  geom_point()+
+  labs(
+    x="Temperature",
+    y="Wind Speed"
+  )
+```
+
+There is less correlation between weather variables than what I expected. But there is correlation between some of the weather variables and bikes rented.
+
+## Splitting the data
+
+```{r}
+
+library(tidymodels)
+# From https://www.tidymodels.org/start/recipes/#data-split
+
+set.seed(222)
+# Put 3/4 of the data into the training set 
+data_split <- initial_split(df_daily, prop = 3/4, strata=seasons)
+
+# Create data frames for the two sets:
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+
+#check
+dim(test_data)
+dim(train_data)
+```
+
+## Next generate CV folds
+
+```{r}
+
+set.seed(222)
+folds <- vfold_cv(train_data, v = 10)
+
+```
+
+## Recipe 1
+
+```{r}
+colnames(train_data)
+```
+
+```{r}
+
+bike_recipe <- recipe(total_bikes ~ ., data = train_data) |>
+  # extract date features
+  step_date(date, features = c("dow")) |>   # adds "date_dow" = day of week
+  
+  # create weekday/weekend variable
+  step_mutate(
+    day_type = factor(if_else(date_dow %in% c("Sat", "Sun"), "weekend", "weekday"))
+  ) |>
+  
+  # remove intermediate day-of-week variable
+  step_rm(date, date_dow) |>
+  
+  # standardize (normalize) numeric variables
+  step_normalize(all_numeric_predictors()) |>
+  
+  # create dummy variables for categorical predictors
+  step_dummy(all_nominal_predictors())
+
+
+```
+
+## Recipe 2
+
+```{r}
+
+bike_recipe2 <- recipe(total_bikes ~ ., data = train_data) |>
+  # extract date features
+  step_date(date, features = c("dow")) |>   # adds "date_dow" = day of week
+  
+  # create weekday/weekend variable
+  step_mutate(
+    day_type = factor(if_else(date_dow %in% c("Sat", "Sun"), "weekend", "weekday"))
+  ) |>
+  
+  # remove intermediate day-of-week variable
+  step_rm(date, date_dow) |>
+  
+  # standardize (normalize) numeric variables
+  step_normalize(all_numeric_predictors()) |>
+  
+  # create dummy variables for categorical predictors
+  step_dummy(all_nominal_predictors())|>
+
+  # adding in the proper interactions
+  step_interact(~ starts_with("seasons"):starts_with("holiday"))|>
+  step_interact(~starts_with("seasons"):mean_temperature)|>
+  step_interact(~total_rainfall:mean_temperature)
+  
+```
+
+## Create 3rd recipe
+
+```{r}
+
+bike_recipe3 <- recipe(total_bikes ~ ., data = train_data) |>
+  # extract date features
+  step_date(date, features = c("dow")) |>   # adds "date_dow" = day of week
+  
+  # create weekday/weekend variable
+  step_mutate(
+    day_type = factor(if_else(date_dow %in% c("Sat", "Sun"), "weekend", "weekday"))
+  ) |>
+  
+  # remove intermediate day-of-week variable
+  step_rm(date, date_dow) |>
+  
+  # standardize (normalize) numeric variables
+  step_normalize(all_numeric_predictors()) |>
+  
+  # create dummy variables for categorical predictors
+  step_dummy(all_nominal_predictors())|>
+
+  # adding in the proper interactions
+  step_interact(~starts_with("seasons"):starts_with("holiday"))|>
+  step_interact(~starts_with("seasons"):mean_temperature)|>
+  step_interact(~total_rainfall:mean_temperature)|>
+
+  #create quadratic terms
+  step_poly(c(total_rainfall,total_snowfall,mean_temperature,mean_humidity,mean_wind_speed), degree = 2)
+```
+
+## Create model
+
+```{r}
+lm_model <- linear_reg() |> 
+  set_engine("lm")
+
+```
+
+## Define workflow for each recipe
+
+```{r}
+
+bike_wf1 <- workflow() |>
+  add_model(lm_model) |>
+  add_recipe(bike_recipe)
+
+bike_wf2 <- workflow() |>
+  add_model(lm_model) |>
+  add_recipe(bike_recipe2)
+
+bike_wf3 <- workflow() |>
+  add_model(lm_model) |>
+  add_recipe(bike_recipe3)
+
+```
+
+## Fit the models
+
+### Recipe 1
+
+```{r}
+bike_res1<-fit_resamples(
+  bike_wf1,
+  resamples = folds,
+  metrics = metric_set(rmse, rsq),
+)
+collect_metrics(bike_res1)
+```
+
+### Recipe 2
+
+```{r}
+bike_res2<-fit_resamples(
+  bike_wf2,
+  resamples = folds,
+  metrics = metric_set(rmse, rsq),
+)
+collect_metrics(bike_res2)
+```
+
+### Recipe 3
+
+```{r}
+
+bike_res3<-fit_resamples(
+  bike_wf3,
+  resamples = folds,
+  metrics = metric_set(rmse, rsq),
+)
+collect_metrics(bike_res3)
+```
+
+## Final Model
+
+-   I will select the first model, it had the lowest RMSE.
+
+```{=html}
+<!-- -->
+```
+-   I will show the final model fit and the associated metrics.
+
+```{r}
+final_fit <- last_fit(bike_wf1, split = data_split)
+```
+
+```{r}
+collect_metrics(final_fit)
+```
+
+## Get the final coefficients
+
+```{r}
+final_model <- final_fit |>
+  extract_fit_parsnip()
+tidy(final_model)
+```
